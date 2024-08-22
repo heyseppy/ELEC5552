@@ -1,6 +1,6 @@
 <p align="center">
-  <img src="https://png.pngtree.com/element_our/png/20181113/rocket-launch-logo-icon-design-template-vector-illustration-png_236653.jpg" alt="Satellite Image">
-  <h1>ELEC5555 Electrical Design Project</h1>
+  <img src="https://i.pngimg.me/thumb/f/720/m2i8m2N4N4b1m2i8.jpg" alt="Satellite Image">
+  <h1>ELEC5552 Electrical Design Project</h1>
   <p1>22/08/2024</p1>
 </p>
 
