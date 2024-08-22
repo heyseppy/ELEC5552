@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="https://i.pngimg.me/thumb/f/720/m2i8m2N4N4b1m2i8.jpg" alt="Satellite Image">
+  <img src="https://images.vexels.com/media/users/3/211832/isolated/preview/6cf8973206c1bb2b7bdae961387c2e6f-drone-quad-front.png" alt="Satellite Image">
   <h1>ELEC5552 Electrical Design Project</h1>
   <p1>22/08/2024</p1>
 </p>
