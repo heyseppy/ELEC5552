@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="https://images.vexels.com/media/users/3/211832/isolated/preview/6cf8973206c1bb2b7bdae961387c2e6f-drone-quad-front.png" alt="Satellite Image">
+  <img src="https://static.vecteezy.com/system/resources/thumbnails/049/514/995/small/drone-hovering-in-mid-air-above-a-landscape-during-daylight-cut-out-transparent-png.png" alt="5552-drone">
   <h1>ELEC5552 Electrical Design Project</h1>
   <p1>22/08/2024</p1>
 </p>
