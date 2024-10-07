@@ -1,7 +1,7 @@
 <p align="center">
   <img src="https://static.vecteezy.com/system/resources/thumbnails/049/514/995/small/drone-hovering-in-mid-air-above-a-landscape-during-daylight-cut-out-transparent-png.png" alt="5552-drone">
   <h1>ELEC5552 Electrical Design Project</h1>
-  <p1>22/08/2024</p1>
+ 
 </p>
 
 ## Overview
