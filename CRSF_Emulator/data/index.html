@@ -1,0 +1,293 @@
+<!DOCTYPE HTML>
+<html>
+<head>
+  <title>ESP32 Channel Control</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <style>
+    /* Basic styling for the webpage */
+    html { 
+      font-family: Arial, sans-serif; 
+      display: inline-block; 
+      text-align: center; 
+      background-color: #f0f0f0;
+      padding: 20px;
+    }
+    h2 { 
+      font-size: 2.5rem; 
+      margin-bottom: 20px;
+    }
+    h3 { 
+      font-size: 1.8rem; 
+      margin-top: 30px; 
+      margin-bottom: 10px;
+    }
+    h4 { 
+      font-size: 1.4rem; 
+      margin-top: 20px; 
+      margin-bottom: 10px;
+    }
+    p { 
+      font-size: 1.2rem; 
+      margin: 5px 0; 
+    }
+    .slider { 
+      width: 300px; 
+      margin: 10px 0;
+    }
+    .button { 
+      padding: 15px 40px; 
+      font-size: 20px; 
+      margin: 10px 5px; 
+      cursor: pointer;
+      border: none;
+      border-radius: 5px;
+      transition: background-color 0.3s;
+    }
+    .button:hover {
+      background-color: #ddd;
+    }
+    .slider-container { 
+      margin: 20px 0; 
+    }
+    .telemetry-container { 
+      margin: 20px 0; 
+      background-color: #fff;
+      padding: 20px;
+      border-radius: 10px;
+      box-shadow: 0 0 10px rgba(0,0,0,0.1);
+    }
+    .warning { 
+      color: red; 
+      font-weight: bold; 
+      font-size: 1.2rem;
+    }
+    ul { 
+      list-style-type: none; 
+      padding: 0; 
+      font-size: 1.2rem;
+    }
+    li { 
+      margin: 5px 0; 
+    }
+    /* Responsive design */
+    @media (max-width: 600px) {
+      .slider { 
+        width: 90%; 
+      }
+      .button { 
+        width: 90%; 
+        padding: 15px 0; 
+      }
+    }
+  </style>
+</head>
+<body>
+  <h2>ESP32 Channel Control</h2>
+
+  <!-- Control Sliders -->
+  <div class="slider-container">
+    <p>Roll: <span id="rollValue">0</span>%</p>
+    <input type="range" min="-100" max="100" value="0" class="slider" id="rollSlider">
+  </div>
+
+  <div class="slider-container">
+    <p>Pitch: <span id="pitchValue">0</span>%</p>
+    <input type="range" min="-100" max="100" value="0" class="slider" id="pitchSlider">
+  </div>
+
+  <div class="slider-container">
+    <p>Yaw: <span id="yawValue">0</span>%</p>
+    <input type="range" min="-100" max="100" value="0" class="slider" id="yawSlider">
+  </div>
+
+  <div class="slider-container">
+    <p>Throttle: <span id="throttleValue">0</span>%</p>
+    <input type="range" min="0" max="100" value="0" class="slider" id="throttleSlider">
+  </div>
+
+  <!-- Control Buttons -->
+  <p>
+    <button class="button" onclick="toggleArm()"><span id="armButton">Arm</span></button>
+    <button class="button" onclick="stopMotors()">Stop Motors</button>
+  </p>
+
+  <!-- Telemetry Data Display -->
+  <div class="telemetry-container">
+    <h3>Telemetry Data</h3>
+    <p>Battery Voltage: <span id="voltage">0.00</span> V</p>
+    <p>Battery Current: <span id="current">0.00</span> A</p>
+    <p>RSSI: <span id="rssi">0</span> dBm</p>
+    <p>Roll Angle: <span id="accRoll">0.00</span>°</p>
+    <p>Pitch Angle: <span id="accPitch">0.00</span>°</p>
+    <p>Yaw Angle: <span id="accYaw">0.00</span>°</p>
+    <p>Altitude: <span id="baroAltitude">0.00</span> m</p>
+    <p>Vertical Speed: <span id="verticalSpeed">0.00</span> m/s</p>
+    <p>Flight Mode: <span id="flightMode">Unknown</span></p>
+    <p>Vibration X: <span id="vibrationX">0.000</span> g</p>
+    <p>Vibration Y: <span id="vibrationY">0.000</span> g</p>
+    <p>Vibration Z: <span id="vibrationZ">0.000</span> g</p>
+    
+    <h4>Motor Outputs</h4>
+    <ul id="motorOutputs">
+      <!-- Motor outputs will be populated here dynamically -->
+    </ul>
+    
+    <p>FC Temperature: <span id="fcTemperature">0.00</span> °C</p>
+    <p class="warning">Warning: <span id="warningMessage">None</span></p>
+  </div>
+
+<!-- JavaScript for Handling Controls and Telemetry -->
+<script>
+  // Reference to slider elements and display spans
+  var rollSlider = document.getElementById("rollSlider");
+  var rollValue = document.getElementById("rollValue");
+
+  var pitchSlider = document.getElementById("pitchSlider");
+  var pitchValue = document.getElementById("pitchValue");
+
+  var yawSlider = document.getElementById("yawSlider");
+  var yawValue = document.getElementById("yawValue");
+
+  var throttleSlider = document.getElementById("throttleSlider");
+  var throttleValue = document.getElementById("throttleValue");
+
+  var armButton = document.getElementById("armButton");
+  var isArmed = false;
+
+  // Update Roll
+  rollSlider.oninput = function() {
+    rollValue.innerHTML = this.value;
+    sendUpdate("roll", this.value);
+  }
+
+  // Update Pitch
+  pitchSlider.oninput = function() {
+    pitchValue.innerHTML = this.value;
+    sendUpdate("pitch", this.value);
+  }
+
+  // Update Yaw
+  yawSlider.oninput = function() {
+    yawValue.innerHTML = this.value;
+    sendUpdate("yaw", this.value);
+  }
+
+  // Update Throttle
+  throttleSlider.oninput = function() {
+    throttleValue.innerHTML = this.value;
+    sendUpdate("throttle", this.value);
+  }
+
+  // Arm/Disarm Function
+  function toggleArm() {
+    isArmed = !isArmed;
+    armButton.innerHTML = isArmed ? "Disarm" : "Arm";
+    sendUpdate("arm", isArmed ? "1" : "0");
+  }
+
+  // Stop Motors Function
+  function stopMotors() {
+    // Reset sliders to zero
+    rollSlider.value = 0;
+    rollValue.innerHTML = 0;
+
+    pitchSlider.value = 0;
+    pitchValue.innerHTML = 0;
+
+    yawSlider.value = 0;
+    yawValue.innerHTML = 0;
+
+    throttleSlider.value = 0;
+    throttleValue.innerHTML = 0;
+
+    // Update Arm Button
+    isArmed = false;
+    armButton.innerHTML = "Arm";
+
+    // Send stop command
+    sendUpdate("stop", "1");
+
+    // Send zero values for Roll, Pitch, Yaw, and Throttle
+    sendUpdate("roll", "0");
+    sendUpdate("pitch", "0");
+    sendUpdate("yaw", "0");
+    sendUpdate("throttle", "0");
+  }
+
+  // Function to send updates to the ESP32
+  function sendUpdate(parameter, value) {
+    var xhr = new XMLHttpRequest();
+    xhr.open("GET", "/update?" + parameter + "=" + value, true);
+    xhr.send();
+  }
+
+  // WebSocket Connection Setup
+  var gateway = `ws://${window.location.hostname}/ws`;
+  var websocket;
+
+  window.addEventListener('load', onLoad);
+
+  function onLoad(event) {
+    initWebSocket();
+  }
+
+  function initWebSocket() {
+    console.log('Connecting to WebSocket...');
+    websocket = new WebSocket(gateway);
+
+    websocket.onopen = function(event) {
+      console.log('WebSocket Connection Opened');
+    };
+
+    websocket.onclose = function(event) {
+      console.log('WebSocket Connection Closed');
+      setTimeout(initWebSocket, 2000); // Retry connection after 2 seconds
+    };
+
+    websocket.onmessage = function(event) {
+      var data = JSON.parse(event.data);
+      
+      // Update Battery Data
+      document.getElementById('voltage').innerHTML = data.voltage.toFixed(2);
+      document.getElementById('current').innerHTML = data.current.toFixed(2);
+      document.getElementById('rssi').innerHTML = data.rssi;
+
+      // Update Accelerometer Data
+      document.getElementById('accRoll').innerHTML = data.accRoll.toFixed(2);
+      document.getElementById('accPitch').innerHTML = data.accPitch.toFixed(2);
+      document.getElementById('accYaw').innerHTML = data.accYaw.toFixed(2);
+
+      // Update Barometer Data
+      document.getElementById('baroAltitude').innerHTML = data.baroAltitude.toFixed(2);
+      document.getElementById('verticalSpeed').innerHTML = data.verticalSpeed.toFixed(2);
+
+      // Update Flight Mode
+      document.getElementById('flightMode').innerHTML = data.flightMode;
+
+      // Update Vibration Levels
+      document.getElementById('vibrationX').innerHTML = data.vibrationX.toFixed(3);
+      document.getElementById('vibrationY').innerHTML = data.vibrationY.toFixed(3);
+      document.getElementById('vibrationZ').innerHTML = data.vibrationZ.toFixed(3);
+
+      // Update Motor Outputs
+      var motorOutputs = data.motorOutputs;
+      var motorList = document.getElementById('motorOutputs');
+      motorList.innerHTML = ''; // Clear existing list
+      for (var i = 0; i < motorOutputs.length; i++) {
+        var listItem = document.createElement('li');
+        listItem.innerHTML = 'Motor ' + (i+1) + ': ' + motorOutputs[i];
+        motorList.appendChild(listItem);
+      }
+
+      // Update Temperature Sensors
+      document.getElementById('fcTemperature').innerHTML = data.fcTemperature.toFixed(2);
+
+      // Update Warning Messages
+      var warning = data.warningMessage;
+      if (warning === "") warning = "None";
+      document.getElementById('warningMessage').innerHTML = warning;
+    };
+  }
+</script>
+</body>
+</html>
