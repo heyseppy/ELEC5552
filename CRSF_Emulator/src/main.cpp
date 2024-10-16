@@ -13,8 +13,8 @@
 #define CRSF_SYNC_BYTE 0xC8
 
 // Define Wi-Fi Credentials
-const char* ssid = "ESP32_Channel_Control";
-const char* password = "12345678";
+const char* ssid = "Team01Drone";
+const char* password = "a1b2c3d4e5";
 
 // Initialize Web Server and WebSocket
 AsyncWebServer server(80);
@@ -88,7 +88,7 @@ void initializeChannels() {
 void updateChannels() {
   channels[0] = constrain((int)(992 + (roll * 820)), 172, 1811);      // Roll (Channel 1)
   channels[1] = constrain((int)(992 + (pitch * 820)), 172, 1811);     // Pitch (Channel 2)
-  channels[2] = constrain((int)(50 + (throttle * 1761)), 0, 1811); // Throttle (Channel 3)
+  channels[2] = constrain((int)(50 + (throttle * 1811)), 0, 1811); // Throttle (Channel 3)
   channels[3] = constrain((int)(992 + (yaw * 820)), 172, 1811);       // Yaw (Channel 4)
 
   // Channel 5 for Arm/Disarm (Aux 1)
