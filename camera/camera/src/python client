@@ -1,0 +1,13 @@
+import socket
+
+# Connect to the ESP32-CAM
+HOST = '192.168.4.1'  # IP address of ESP32-CAM
+PORT = 8080           # Socket server port
+
+with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+    s.connect((HOST, PORT))
+    while True:
+        data = s.recv(1024)  # Receive data from the ESP32-CAM
+        if not data:
+            break
+        print('Received:', data.decode())  # Print the detected angle
