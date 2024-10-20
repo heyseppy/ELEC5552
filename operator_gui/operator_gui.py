@@ -6,306 +6,470 @@ from tkinter import scrolledtext, messagebox
 from tkinter import ttk
 import cv2
 from PIL import Image, ImageTk
-import requests
 import numpy as np
+import logging
 
-# ESP32 Wi-Fi AP details
-ssid = "ESP32-Test-AP"
-password = "12345678"
-esp32_ip = '172.20.10.13'  # Replace with your ESP32's IP address
-port = 12345               # TCP port for obstacle distance
-heartbeat_command = "HEARTBEAT"
-stream_url = 'http://172.20.10.12:81/stream'  # ESP32-CAM stream URL
+# Configuration Constants
+SSID = "ESP32-Test-AP"
+PASSWORD = "12345678"
+ESP32_IP = '172.20.10.13'  # Replace with your ESP32's IP address
+PORT = 12345               # TCP port for obstacle distance
+STREAM_URL = 'http://172.20.10.12:81/stream'  # ESP32-CAM stream URL
 
-# Global variables
-stop_heartbeat = False
-sock = None
-sock_file = None  # File-like object for reading from socket
-sock_lock = threading.Lock()  # Lock for socket access
+# Configure Logging
+logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 
-# Initialize Tkinter GUI components
-root = tk.Tk()
-root.title("Team01 Design Control Interface Rev2")
-root.geometry("900x800")  # Increased size for better layout
-root.resizable(False, False)  # Fixed window size
 
-# Styling with ttk
-style = ttk.Style()
-style.theme_use('clam')  # You can choose other themes like 'default', 'alt', 'classic', etc.
-style.configure("TButton", font=("Arial", 12), padding=10)
-style.configure("Status.TLabel", font=("Arial", 10), foreground="green")
+class NetworkClient:
+    """Handles network communication with the ESP32."""
 
-# Frames for better layout organization
-top_frame = ttk.Frame(root)
-top_frame.pack(pady=10)
+    def __init__(self, ip, port, logger, update_distance_callback, update_status_callback):
+        self.ip = ip
+        self.port = port
+        self.logger = logger
+        self.update_distance_callback = update_distance_callback
+        self.update_status_callback = update_status_callback
+        self.sock = None
+        self.sock_file = None
+        self.lock = threading.Lock()
+        self.connected_event = threading.Event()
+        self.stop_event = threading.Event()
 
-middle_frame = ttk.Frame(root)
-middle_frame.pack(pady=10)
-
-bottom_frame = ttk.Frame(root)
-bottom_frame.pack(pady=10, fill='both', expand=True)
-
-status_frame = ttk.Frame(root)
-status_frame.pack(side='bottom', fill='x')
-
-# Connection Status Indicator
-connection_status = ttk.Label(status_frame, text="Disconnected", style="Status.TLabel")
-connection_status.pack(side='left', padx=10)
-
-# Log Display Area
-log_label = ttk.Label(bottom_frame, text="Log:")
-log_label.pack(anchor='w', padx=10)
-
-log_area = scrolledtext.ScrolledText(bottom_frame, width=100, height=10, state='disabled', wrap='word')
-log_area.pack(padx=10, pady=5)
-
-# Message Display Label
-message_label = ttk.Label(top_frame, text="", font=("Arial", 14))
-message_label.pack(pady=5)
-
-# Line Angle Display Label
-angle_label = ttk.Label(top_frame, text="Line Angle: N/A", font=("Arial", 20, "bold"), foreground="blue")
-angle_label.pack(pady=10)
-
-# Obstacle Distance Display Label
-distance_label = ttk.Label(top_frame, text="", font=("Arial", 20, "bold"), foreground="red")
-distance_label.pack(pady=10)
-
-# Video Frame to display the camera feed under buttons
-video_frame = ttk.Frame(root)
-video_frame.pack(pady=10, padx=10)
-
-camera_feed_label = tk.Label(video_frame)
-camera_feed_label.pack()
-
-# Function to update the connection status
-def update_connection_status(status):
-    connection_status.config(text=status)
-    if status == "Connected":
-        connection_status.config(foreground="green")
-    elif status == "Disconnected":
-        connection_status.config(foreground="red")
-    elif status == "Reconnecting...":
-        connection_status.config(foreground="orange")
-
-# Function to append messages to the log area
-def append_log(message):
-    log_area.config(state='normal')
-    log_area.insert(tk.END, f"{time.strftime('%Y-%m-%d %H:%M:%S')} - {message}\n")
-    log_area.see(tk.END)
-    log_area.config(state='disabled')
-
-# Socket Connection Functions
-def connect_to_server():
-    """Establish a persistent connection to the ESP32 server."""
-    global sock, sock_file
-    while True:
-        try:
-            append_log("Attempting to connect to the server...")
-            update_connection_status("Reconnecting...")
-            s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-            s.connect((esp32_ip, port))
-            with sock_lock:
-                sock = s
-                sock_file = s.makefile('r')  # Create a file-like object for reading
-            append_log("Connected to the server.")
-            update_connection_status("Connected")
-            break
-        except socket.error as e:
-            append_log(f"Connection failed: {e}. Retrying in 5 seconds...")
-            update_connection_status("Disconnected")
-            time.sleep(5)
-
-# Function to handle receiving obstacle distance from the socket
-def receive_obstacle_distance():
-    """Continuously receive obstacle distance data from the ESP32."""
-    global sock, sock_file
-    while True:
-        try:
-            # Ensure the connection is alive
-            if sock is None:
-                connect_to_server()
-            with sock_lock:
-                while True:
-                    if sock_file:
-                        obstacle_data = sock_file.readline().strip()
-                        if obstacle_data:
-                            append_log(f"Received obstacle distance: {obstacle_data}")
-                            root.after(0, lambda: distance_label.config(text=f"{obstacle_data}"))
-        except socket.error as e:
-            append_log(f"Socket error: {e}")
-            update_connection_status("Disconnected")
-            connect_to_server()
-        except Exception as e:
-            append_log(f"Unexpected error: {e}")
-        time.sleep(1)
-
-# Function to detect the line angle using OpenCV
-def detect_line_angle(frame):
-    """Detect the line angle from the camera feed using OpenCV."""
-    gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
-    edges = cv2.Canny(gray, 50, 150, apertureSize=3)
-    lines = cv2.HoughLines(edges, 1, np.pi / 180, 150)
-
-    if lines is not None:
-        for rho, theta in lines[0]:
-            a = np.cos(theta)
-            b = np.sin(theta)
-            x0 = a * rho
-            y0 = b * rho
-            x1 = int(x0 + 1000 * (-b))
-            y1 = int(y0 + 1000 * (a))
-            x2 = int(x0 - 1000 * (-b))
-            y2 = int(y0 - 1000 * (a))
-            angle = np.degrees(np.arctan2(y2 - y1, x2 - x1))
-            return angle
-    return None
-
-# Function to display video feed from ESP32-CAM and detect line
-def update_camera_feed():
-    cap = cv2.VideoCapture(stream_url)
-    if not cap.isOpened():
-        append_log("Unable to open the video stream.")
-        root.after(0, lambda: camera_feed_label.config(text="Unable to open video stream."))
-        return
-    append_log("Video stream started.")
-    while True:
-        ret, frame = cap.read()
-        if ret:
+    def connect(self):
+        """Establish a connection to the ESP32 server."""
+        while not self.stop_event.is_set():
             try:
-                frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-                angle = detect_line_angle(frame)
-                if angle is not None:
-                    root.after(0, lambda: angle_label.config(text=f"Line Angle: {angle:.2f}°"))
-                img = Image.fromarray(frame_rgb)
-                imgtk = ImageTk.PhotoImage(image=img)
-                camera_feed_label.imgtk = imgtk
-                camera_feed_label.config(image=imgtk)
+                self.logger.info("Attempting to connect to the server...")
+                self.update_status_callback("Reconnecting...")
+                s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+                s.connect((self.ip, self.port))
+                with self.lock:
+                    self.sock = s
+                    self.sock_file = s.makefile('r')
+                self.logger.info("Connected to the server.")
+                self.update_status_callback("Connected")
+                self.connected_event.set()
+                return
+            except socket.error as e:
+                self.logger.error(f"Connection failed: {e}. Retrying in 5 seconds...")
+                self.update_status_callback("Disconnected")
+                time.sleep(5)
+
+    def receive_data(self):
+        """Continuously receive obstacle distance data from the ESP32."""
+        while not self.stop_event.is_set():
+            if not self.connected_event.is_set():
+                self.connect()
+
+            try:
+                with self.lock:
+                    if self.sock_file:
+                        obstacle_data = self.sock_file.readline().strip()
+                        if obstacle_data:
+                            self.logger.info(f"Received obstacle distance: {obstacle_data}")
+                            self.update_distance_callback(obstacle_data)
+            except socket.error as e:
+                self.logger.error(f"Socket error: {e}")
+                self.update_status_callback("Disconnected")
+                self.connected_event.clear()
             except Exception as e:
-                append_log(f"Error processing video frame: {e}")
+                self.logger.error(f"Unexpected error: {e}")
+                self.connected_event.clear()
+
+            time.sleep(1)
+
+    def send_command(self, command):
+        """Send a command to the ESP32."""
+        with self.lock:
+            if self.sock:
+                try:
+                    self.sock.sendall((command + "\n").encode())
+                    self.logger.info(f"Sent command: {command}")
+                except socket.error as e:
+                    self.logger.error(f"Failed to send command '{command}': {e}")
+                    self.update_status_callback("Disconnected")
+                    self.connected_event.clear()
+
+    def start(self):
+        """Start the network client threads."""
+        self.receive_thread = threading.Thread(target=self.receive_data, daemon=True)
+        self.receive_thread.start()
+
+    def stop(self):
+        """Stop the network client and close the socket."""
+        self.stop_event.set()
+        with self.lock:
+            if self.sock_file:
+                self.sock_file.close()
+            if self.sock:
+                self.sock.close()
+                self.sock = None
+        self.connected_event.clear()
+
+
+class VideoStreamHandler:
+    """Handles video streaming and line detection from the ESP32-CAM."""
+
+    def __init__(self, stream_url, logger, update_angle_callback, update_feed_callback):
+        self.stream_url = stream_url
+        self.logger = logger
+        self.update_angle_callback = update_angle_callback
+        self.update_feed_callback = update_feed_callback
+        self.stop_event = threading.Event()
+
+    def detect_line_angle(self, frame):
+        """Detect the line angle from the camera feed using OpenCV."""
+        gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+        edges = cv2.Canny(gray, 50, 150, apertureSize=3)
+        lines = cv2.HoughLines(edges, 1, np.pi / 180, 150)
+
+        if lines is not None:
+            for rho, theta in lines[0]:
+                a = np.cos(theta)
+                b = np.sin(theta)
+                x0 = a * rho
+                y0 = b * rho
+                x1 = int(x0 + 1000 * (-b))
+                y1 = int(y0 + 1000 * (a))
+                x2 = int(x0 - 1000 * (-b))
+                y2 = int(y0 - 1000 * (a))
+                angle = np.degrees(np.arctan2(y2 - y1, x2 - x1))
+                return angle
+        return None
+
+    def stream_video(self):
+        """Stream video from the ESP32-CAM and process each frame."""
+        cap = cv2.VideoCapture(self.stream_url)
+        if not cap.isOpened():
+            self.logger.error("Unable to open the video stream.")
+            self.update_feed_callback("Unable to open video stream.")
+            return
+
+        self.logger.info("Video stream started.")
+        while not self.stop_event.is_set():
+            ret, frame = cap.read()
+            if ret:
+                try:
+                    angle = self.detect_line_angle(frame)
+                    if angle is not None:
+                        self.update_angle_callback(f"Line Angle: {angle:.2f}°")
+
+                    frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+                    img = Image.fromarray(frame_rgb)
+                    imgtk = ImageTk.PhotoImage(image=img)
+                    self.update_feed_callback(imgtk)
+                except Exception as e:
+                    self.logger.error(f"Error processing video frame: {e}")
+            else:
+                self.logger.error("Failed to read frame from video stream.")
+                self.update_feed_callback("Failed to read frame.")
+                break
+
+            time.sleep(0.03)  # Approximately 30 FPS
+
+        cap.release()
+
+    def start(self):
+        """Start the video streaming thread."""
+        self.video_thread = threading.Thread(target=self.stream_video, daemon=True)
+        self.video_thread.start()
+
+    def stop(self):
+        """Stop the video streaming."""
+        self.stop_event.set()
+
+
+class Simulator:
+    """Simulates drone states for testing purposes."""
+
+    def __init__(self, logger, update_state_callback):
+        self.logger = logger
+        self.update_state_callback = update_state_callback
+        self.states = ["Lifting", "Hovering", "Following Line", "Stopping because of obstacle"]
+        self.current_index = 0
+        self.simulation_thread = None
+        self.stop_event = threading.Event()
+        self.simulation_running = False
+
+    def run_simulation(self):
+        """Cycle through predefined drone states."""
+        while not self.stop_event.is_set():
+            state = self.states[self.current_index]
+            self.logger.info(f"Simulation State: {state}")
+            self.update_state_callback(state)
+            self.current_index = (self.current_index + 1) % len(self.states)
+            time.sleep(1)
+
+    def start(self):
+        """Start the simulation."""
+        if not self.simulation_running:
+            self.simulation_running = True
+            self.stop_event.clear()
+            self.simulation_thread = threading.Thread(target=self.run_simulation, daemon=True)
+            self.simulation_thread.start()
+            self.logger.info("Drone simulation started.")
+
+    def stop(self):
+        """Stop the simulation."""
+        if self.simulation_running:
+            self.stop_event.set()
+            if self.simulation_thread.is_alive():
+                self.simulation_thread.join(timeout=2)
+            self.simulation_running = False
+            self.logger.info("Drone simulation stopped.")
+
+
+class DroneControlApp:
+    """Main application class for the Drone Control Interface."""
+
+    def __init__(self, root):
+        self.root = root
+        self.root.title("Team01 Design Control Interface Rev2")
+        self.root.geometry("900x800")
+        self.root.resizable(False, False)
+
+        # Initialize GUI Components
+        self.setup_styles()
+        self.create_frames()
+        self.create_widgets()
+
+        # Initialize Logging Area
+        self.setup_logging()
+
+        # Initialize Network Client
+        self.network_client = NetworkClient(
+            ip=ESP32_IP,
+            port=PORT,
+            logger=self.logger,
+            update_distance_callback=self.update_distance_label,
+            update_status_callback=self.update_connection_status
+        )
+
+        # Initialize Video Stream Handler
+        self.video_stream_handler = VideoStreamHandler(
+            stream_url=STREAM_URL,
+            logger=self.logger,
+            update_angle_callback=self.update_angle_label,
+            update_feed_callback=self.update_camera_feed
+        )
+
+        # Initialize Simulator
+        self.simulator = Simulator(
+            logger=self.logger,
+            update_state_callback=self.update_state_label
+        )
+
+        # Start Network and Video Threads
+        self.network_client.start()
+        self.video_stream_handler.start()
+
+        # Handle Window Close Event
+        self.root.protocol("WM_DELETE_WINDOW", self.on_closing)
+
+    def setup_styles(self):
+        """Configure ttk styles."""
+        style = ttk.Style()
+        style.theme_use('clam')
+        style.configure("TButton", font=("Arial", 12), padding=10)
+        style.configure("Status.TLabel", font=("Arial", 10), foreground="red")
+        style.configure("Red.TButton", background="red", foreground="white")
+        style.configure("Yellow.TButton", background="yellow", foreground="black")
+        style.configure("Green.TButton", background="green", foreground="white")
+        style.configure("Blue.TButton", background="blue", foreground="white")
+
+    def create_frames(self):
+        """Create and organize frames for layout."""
+        self.top_frame = ttk.Frame(self.root)
+        self.top_frame.pack(pady=10)
+
+        self.middle_frame = ttk.Frame(self.root)
+        self.middle_frame.pack(pady=10)
+
+        self.bottom_frame = ttk.Frame(self.root)
+        self.bottom_frame.pack(pady=10, fill='both', expand=True)
+
+        self.status_frame = ttk.Frame(self.root)
+        self.status_frame.pack(side='bottom', fill='x')
+
+    def create_widgets(self):
+        """Create and place all GUI widgets."""
+        # Connection Status Indicator
+        self.connection_status = ttk.Label(self.status_frame, text="Disconnected", style="Status.TLabel")
+        self.connection_status.pack(side='left', padx=10)
+
+        # Log Display Area
+        log_label = ttk.Label(self.bottom_frame, text="Log:")
+        log_label.pack(anchor='w', padx=10)
+
+        self.log_area = scrolledtext.ScrolledText(self.bottom_frame, width=100, height=10, state='disabled', wrap='word')
+        self.log_area.pack(padx=10, pady=5)
+
+        # Message Display Label
+        self.message_label = ttk.Label(self.top_frame, text="", font=("Arial", 14))
+        self.message_label.pack(pady=5)
+
+        # Drone State Display Label
+        self.state_label = ttk.Label(self.top_frame, text="State: N/A", font=("Arial", 16, "bold"), foreground="purple")
+        self.state_label.pack(pady=10)
+
+        # Line Angle Display Label
+        self.angle_label = ttk.Label(self.top_frame, text="Line Angle: N/A", font=("Arial", 20, "bold"), foreground="blue")
+        self.angle_label.pack(pady=10)
+
+        # Obstacle Distance Display Label
+        self.distance_label = ttk.Label(self.top_frame, text="Obstacle Distance: N/A", font=("Arial", 20, "bold"), foreground="red")
+        self.distance_label.pack(pady=10)
+
+        # Video Frame to display the camera feed
+        self.video_frame = ttk.Frame(self.root)
+        self.video_frame.pack(pady=10, padx=10)
+
+        self.camera_feed_label = tk.Label(self.video_frame)
+        self.camera_feed_label.pack()
+
+        # Control Buttons
+        self.create_control_buttons()
+
+    def create_control_buttons(self):
+        """Create control buttons and simulation button."""
+        # Emergency Stop Button
+        emergency_button = ttk.Button(
+            self.middle_frame,
+            text="Emergency Stop",
+            command=self.emergency_stop,
+            style="Red.TButton"
+        )
+        emergency_button.grid(row=0, column=0, padx=20, pady=10, ipadx=10, ipady=10)
+
+        # Hover Mode Button
+        hover_button = ttk.Button(
+            self.middle_frame,
+            text="Hover Mode",
+            command=lambda: self.send_command("HOVER"),
+            style="Yellow.TButton"
+        )
+        hover_button.grid(row=0, column=1, padx=20, pady=10, ipadx=10, ipady=10)
+
+        # Manual Mode Button
+        manual_button = ttk.Button(
+            self.middle_frame,
+            text="Manual Mode",
+            command=lambda: self.send_command("MANUAL"),
+            style="Green.TButton"
+        )
+        manual_button.grid(row=0, column=2, padx=20, pady=10, ipadx=10, ipady=10)
+
+        # Autonomous Control Button
+        autonomous_button = ttk.Button(
+            self.middle_frame,
+            text="Autonomous Control",
+            command=lambda: self.send_command("AUTO"),
+            style="Blue.TButton"
+        )
+        autonomous_button.grid(row=0, column=3, padx=20, pady=10, ipadx=10, ipady=10)
+
+        # Simulation Button
+        self.simulate_button = ttk.Button(
+            self.middle_frame,
+            text="Start Simulation",
+            command=self.toggle_simulation,
+            style="Blue.TButton"
+        )
+        self.simulate_button.grid(row=1, column=0, columnspan=4, padx=20, pady=10, ipadx=10, ipady=10)
+
+    def setup_logging(self):
+        """Configure the logging area."""
+        self.logger = logging.getLogger("DroneControlApp")
+        self.logger.setLevel(logging.INFO)
+
+        # Create a handler that writes log messages to the GUI
+        gui_handler = GUIHandler(self.log_area)
+        gui_handler.setLevel(logging.INFO)
+
+        # Add the handler to the logger
+        self.logger.addHandler(gui_handler)
+
+    def update_connection_status(self, status):
+        """Update the connection status label."""
+        self.connection_status.config(text=status)
+        if status == "Connected":
+            self.connection_status.config(foreground="green")
+        elif status == "Disconnected":
+            self.connection_status.config(foreground="red")
+        elif status == "Reconnecting...":
+            self.connection_status.config(foreground="orange")
+
+    def update_distance_label(self, distance):
+        """Update the obstacle distance label."""
+        self.distance_label.config(text=f"Obstacle Distance: {distance}")
+
+    def update_angle_label(self, angle_text):
+        """Update the line angle label."""
+        self.angle_label.config(text=angle_text)
+
+    def update_camera_feed(self, imgtk):
+        """Update the camera feed in the GUI."""
+        if isinstance(imgtk, str):
+            self.camera_feed_label.config(text=imgtk)
         else:
-            append_log("Failed to read frame from video stream.")
-            root.after(0, lambda: camera_feed_label.config(text="Failed to read frame."))
-            break
-        time.sleep(0.03)  # Approximately 30 FPS
-    cap.release()
+            self.camera_feed_label.imgtk = imgtk
+            self.camera_feed_label.config(image=imgtk)
 
-# Graceful Exit Handling
-def on_closing():
-    """Handle the window closing event."""
-    global stop_heartbeat
-    if messagebox.askokcancel("Quit", "Do you want to quit the application?"):
-        append_log("Shutting down application...")
-        stop_heartbeat = True  # Stop the heartbeat thread
-        if heartbeat_thread.is_alive():
-            heartbeat_thread.join(timeout=2)  # Wait for heartbeat thread to finish
-        if angle_thread.is_alive():
-            angle_thread.join(timeout=2)  # Wait for angle thread to finish
-        if distance_thread.is_alive():
-            distance_thread.join(timeout=2)  # Wait for distance thread to finish
-        with sock_lock:
-            if sock_file:
-                sock_file.close()
-                sock_file = None
-            if sock:
-                sock.close()
-                sock = None
-        root.destroy()
+    def update_state_label(self, state):
+        """Update the drone state label."""
+        self.state_label.config(text=f"State: {state}")
 
-# Functions for each button press action
-def emergency():
-    append_log("Emergency Stop triggered.")
-    send_command("STOP")
-    message_label.config(text="Emergency Stop")
+    def send_command(self, command):
+        """Send a command to the ESP32."""
+        self.network_client.send_command(command)
+        self.message_label.config(text=f"Command Sent: {command}")
 
-def hover():
-    append_log("Hover Mode activated.")
-    send_command("HOVER")
-    message_label.config(text="Hover Mode")
+    def emergency_stop(self):
+        """Handle Emergency Stop action."""
+        self.logger.info("Emergency Stop triggered.")
+        self.send_command("STOP")
+        self.message_label.config(text="Emergency Stop")
 
-def manual():
-    append_log("Manual Mode activated.")
-    send_command("MANUAL")
-    message_label.config(text="Manual Mode")
+    def toggle_simulation(self):
+        """Toggle the drone simulation on or off."""
+        if not self.simulator.simulation_running:
+            self.simulator.start()
+            self.simulate_button.config(text="Stop Simulation")
+        else:
+            self.simulator.stop()
+            self.simulate_button.config(text="Start Simulation")
 
-def autonomous():
-    append_log("Autonomous Mode activated.")
-    send_command("AUTO")
-    message_label.config(text="Autonomous Mode")
+    def on_closing(self):
+        """Handle the window closing event."""
+        if messagebox.askokcancel("Quit", "Do you want to quit the application?"):
+            self.logger.info("Shutting down application...")
+            self.network_client.stop()
+            self.video_stream_handler.stop()
+            self.simulator.stop()
+            self.root.destroy()
 
-def send_command(command):
-    """Send a command to the ESP32."""
-    append_log(f"Sending command: {command}")
-    # Handle sending command via socket (or other communication method)
 
-def setup_gui():
-    global emergency_button, hover_button, manual_button, autonomous_button, custom_command_entry
+class GUIHandler(logging.Handler):
+    """Custom logging handler to display logs in the GUI."""
 
-    # Define custom styles for buttons
-    style.configure("Red.TButton", background="red", foreground="white")
-    style.configure("Yellow.TButton", background="yellow", foreground="black")
-    style.configure("Green.TButton", background="green", foreground="white")
-    style.configure("Blue.TButton", background="blue", foreground="white")
-    style.configure("Pressed.TButton", background="lightgrey", foreground="black")
+    def __init__(self, text_widget):
+        super().__init__()
+        self.text_widget = text_widget
 
-    # Create Buttons
-    emergency_button = ttk.Button(middle_frame, text="Emergency Stop", command=emergency, style="Red.TButton")
-    emergency_button.grid(row=0, column=0, padx=20, pady=10, ipadx=10, ipady=10)
+    def emit(self, record):
+        msg = self.format(record)
+        self.text_widget.configure(state='normal')
+        self.text_widget.insert(tk.END, msg + "\n")
+        self.text_widget.configure(state='disabled')
+        self.text_widget.see(tk.END)
 
-    hover_button = ttk.Button(middle_frame, text="Hover Mode", command=hover, style="Yellow.TButton")
-    hover_button.grid(row=0, column=1, padx=20, pady=10, ipadx=10, ipady=10)
 
-    manual_button = ttk.Button(middle_frame, text="Manual Mode", command=manual, style="Green.TButton")
-    manual_button.grid(row=0, column=2, padx=20, pady=10, ipadx=10, ipady=10)
-
-    autonomous_button = ttk.Button(middle_frame, text="Autonomous Control", command=autonomous, style="Blue.TButton")
-    autonomous_button.grid(row=0, column=3, padx=20, pady=10, ipadx=10, ipady=10)
-
-    # Custom Command Section
-    custom_command_label = ttk.Label(top_frame, text="Send Custom Command:", font=("Arial", 12))
-    custom_command_label.pack(pady=5)
-
-    custom_command_frame = ttk.Frame(top_frame)
-    custom_command_frame.pack(pady=5)
-
-    custom_command_entry = ttk.Entry(custom_command_frame, width=50, font=("Arial", 12))
-    custom_command_entry.pack(side='left', padx=5)
-
-    send_custom_button = ttk.Button(custom_command_frame, text="Send", command=send_custom_command)
-    send_custom_button.pack(side='left', padx=5)
-
-def send_custom_command():
-    command = custom_command_entry.get().strip()
-    if command:
-        append_log(f"Custom command sent: {command}")
-        send_command(command)
-        custom_command_entry.delete(0, tk.END)
-    else:
-        messagebox.showwarning("Input Error", "Please enter a command to send.")
-
-# Main Function
 def main():
-    global heartbeat_thread, angle_thread, distance_thread
-    # Establish initial connection to the server
-    connection_thread = threading.Thread(target=connect_to_server, daemon=True)
-    connection_thread.start()
-
-    # Start receiving obstacle distance in a separate thread
-    distance_thread = threading.Thread(target=receive_obstacle_distance, daemon=True)
-    distance_thread.start()
-
-    # Start the camera feed thread with line detection
-    camera_thread = threading.Thread(target=update_camera_feed, daemon=True)
-    camera_thread.start()
-
-    # Setup the GUI
-    setup_gui()
-
-    # Handle window close event
-    root.protocol("WM_DELETE_WINDOW", on_closing)
-
-    # Start the Tkinter event loop
+    """Main function to start the Drone Control Application."""
+    root = tk.Tk()
+    app = DroneControlApp(root)
     root.mainloop()
+
 
 if __name__ == "__main__":
     main()
