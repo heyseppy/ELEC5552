@@ -19,7 +19,6 @@ STREAM_URL = 'http://172.20.10.12:81/stream'  # ESP32-CAM stream URL
 # Configure Logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 
-
 class NetworkClient:
     """Handles network communication with the ESP32."""
 
