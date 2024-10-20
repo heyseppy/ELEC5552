@@ -1,0 +1,1 @@
+files supported for latest version of Fusion
