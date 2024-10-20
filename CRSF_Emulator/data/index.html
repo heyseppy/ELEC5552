@@ -1,223 +1,55 @@
-<!DOCTYPE HTML>
-<html>
+<!DOCTYPE html>
+<html lang="en">
 <head>
-  <title>ESP32 Channel Control</title>
-  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Drone Controller</title>
   <style>
-    /* Styling for the webpage */
-    html { 
-      font-family: Arial, sans-serif; 
-      display: inline-block; 
-      text-align: center; 
-      background-color: #1e1e1e;
-      color: #fff;
-      padding: 20px;
-    }
-    h2 { 
-      font-size: 2.5rem; 
-      margin-bottom: 20px;
-      color: #ff9800;
-    }
-    p, .slider-container p, .telemetry-container p { 
-      font-size: 1.2rem; 
-      margin: 5px 0; 
-    }
-    .slider { 
-      width: 100%; 
-      margin: 10px 0;
-    }
-    .button { 
-      padding: 15px 40px; 
-      font-size: 20px; 
-      margin: 10px 5px; 
-      cursor: pointer;
-      border: none;
-      border-radius: 10px;
-      background-color: #ff9800;
-      color: #fff;
-      transition: background-color 0.3s, transform 0.1s;
-      outline: none;
-    }
-    .button:hover {
-      background-color: #e68a00;
-    }
-    .button:active {
-      transform: scale(0.98);
-    }
-    .slider-container { 
-      margin: 20px 0; 
-    }
-    .telemetry-container { 
-      margin: 20px 0; 
-      background-color: #333;
-      padding: 20px;
-      border-radius: 10px;
-      box-shadow: 0 0 15px rgba(0, 0, 0, 0.2);
-    }
-    .warning { 
-      color: #ff3333; 
-      font-weight: bold; 
-      font-size: 1.2rem;
-    }
-    ul { 
-      list-style-type: none; 
-      padding: 0; 
-      font-size: 1.2rem;
-    }
-    li { 
-      margin: 5px 0; 
-    }
-    /* Responsive styling */
-    @media (max-width: 600px) {
-      .slider { 
-        width: 90%; 
-      }
-      .button { 
-        width: 90%; 
-        padding: 15px 0; 
-      }
-    }
+    .control { margin-bottom: 10px; }
+    input[type=range] { width: 300px; }
+    button { width: 100px; height: 30px; }
   </style>
 </head>
 <body>
-  <h2>ESP32 Channel Control</h2>
-
-  <!-- Control Sliders -->
-  <div class="slider-container">
-    <p>Roll: <span id="rollValue">0</span>%</p>
-    <input type="range" min="-100" max="100" value="0" class="slider" id="rollSlider">
+  <h1>Drone Controller</h1>
+  
+  <div class="control">
+    <label for="throttle">Throttle</label><br>
+    <input type="range" id="throttle" min="0" max="100" value="0">
+  </div>
+  
+  <div class="control">
+    <label for="roll">Roll</label><br>
+    <input type="range" id="roll" min="-100" max="100" value="0">
+  </div>
+  
+  <div class="control">
+    <label for="pitch">Pitch</label><br>
+    <input type="range" id="pitch" min="-100" max="100" value="0">
+  </div>
+  
+  <div class="control">
+    <label for="yaw">Yaw</label><br>
+    <input type="range" id="yaw" min="-100" max="100" value="0">
+  </div>
+  
+  <div class="control">
+    <button id="armButton">Arm</button>
   </div>
 
-  <div class="slider-container">
-    <p>Pitch: <span id="pitchValue">0</span>%</p>
-    <input type="range" min="-100" max="100" value="0" class="slider" id="pitchSlider">
-  </div>
+  <script>
+    const throttle = document.getElementById('throttle');
+    const roll = document.getElementById('roll');
+    const pitch = document.getElementById('pitch');
+    const yaw = document.getElementById('yaw');
+    const armButton = document.getElementById('armButton');
+    let isArmed = false;
 
-  <div class="slider-container">
-    <p>Yaw: <span id="yawValue">0</span>%</p>
-    <input type="range" min="-100" max="100" value="0" class="slider" id="yawSlider">
-  </div>
-
-  <div class="slider-container">
-    <p>Throttle: <span id="throttleValue">0</span>%</p>
-    <input type="range" min="0" max="100" value="0" class="slider" id="throttleSlider">
-  </div>
-
-  <!-- Control Buttons -->
-  <p>
-    <button class="button" onclick="toggleArm()"><span id="armButton">Arm</span></button>
-    <button class="button" onclick="stopMotors()">Stop Motors</button>
-  </p>
-
-  <!-- Telemetry Data Display -->
-  <div class="telemetry-container">
-    <h3>Telemetry Data</h3>
-    <p>Battery Voltage: <span id="voltage">0.00</span> V</p>
-    <p>Battery Current: <span id="current">0.00</span> A</p>
-    <p>RSSI: <span id="rssi">0</span> dBm</p>
-    <p>Roll Angle: <span id="accRoll">0.00</span>°</p>
-    <p>Pitch Angle: <span id="accPitch">0.00</span>°</p>
-    <p>Yaw Angle: <span id="accYaw">0.00</span>°</p>
-    <p>Altitude: <span id="baroAltitude">0.00</span> m</p>
-    <p>Vertical Speed: <span id="verticalSpeed">0.00</span> m/s</p>
-    <p>Flight Mode: <span id="flightMode">Unknown</span></p>
-    <p>Vibration X: <span id="vibrationX">0.000</span> g</p>
-    <p>Vibration Y: <span id="vibrationY">0.000</span> g</p>
-    <p>Vibration Z: <span id="vibrationZ">0.000</span> g</p>
+    const ws = new WebSocket(`ws://${location.hostname}/ws`);
     
-    <h4>Motor Outputs</h4>
-    <ul id="motorOutputs">
-      <!-- Motor outputs will be populated here dynamically -->
-    </ul>
-    
-    <p>FC Temperature: <span id="fcTemperature">0.00</span> °C</p>
-    <p class="warning">Warning: <span id="warningMessage">None</span></p>
-  </div>
-
-<!-- JavaScript for Controls and Keyboard Events -->
-<script>
-  var rollSlider = document.getElementById("rollSlider");
-  var rollValue = document.getElementById("rollValue");
-
-  var pitchSlider = document.getElementById("pitchSlider");
-  var pitchValue = document.getElementById("pitchValue");
-
-  var yawSlider = document.getElementById("yawSlider");
-  var yawValue = document.getElementById("yawValue");
-
-  var throttleSlider = document.getElementById("throttleSlider");
-  var throttleValue = document.getElementById("throttleValue");
-
-  var armButton = document.getElementById("armButton");
-  var isArmed = false;
-
-  rollSlider.oninput = function() { updateControl("roll", this, rollValue); };
-  pitchSlider.oninput = function() { updateControl("pitch", this, pitchValue); };
-  yawSlider.oninput = function() { updateControl("yaw", this, yawValue); };
-  throttleSlider.oninput = function() { updateControl("throttle", this, throttleValue); };
-
-  function updateControl(control, slider, display) {
-    display.innerHTML = slider.value;
-    sendUpdate(control, slider.value);
-  }
-
-  function toggleArm() {
-    isArmed = !isArmed;
-    armButton.innerHTML = isArmed ? "Disarm" : "Arm";
-    sendUpdate("arm", isArmed ? "1" : "0");
-  }
-
-  function stopMotors() {
-    rollSlider.value = pitchSlider.value = yawSlider.value = throttleSlider.value = 0;
-    rollValue.innerHTML = pitchValue.innerHTML = yawValue.innerHTML = throttleValue.innerHTML = 0;
-    isArmed = false;
-    armButton.innerHTML = "Arm";
-    sendUpdate("stop", "1");
-  }
-
-  function sendUpdate(parameter, value) {
-    var xhr = new XMLHttpRequest();
-    xhr.open("GET", "/update?" + parameter + "=" + value, true);
-    xhr.send();
-  }
-
-  // Key Control Events
-  document.addEventListener('keydown', function(event) {
-    switch (event.key) {
-      case "ArrowUp":
-        throttleSlider.value = Math.min(100, +throttleSlider.value + 1);
-        updateControl("throttle", throttleSlider, throttleValue);
-        break;
-      case "ArrowDown":
-        throttleSlider.value = Math.max(0, throttleSlider.value - 1);
-        updateControl("throttle", throttleSlider, throttleValue);
-        break;
-      case "ArrowRight":
-        yawSlider.value = Math.min(100, +yawSlider.value + 1);
-        updateControl("yaw", yawSlider, yawValue);
-        break;
-      case "ArrowLeft":
-        yawSlider.value = Math.max(-100, yawSlider.value - 1);
-        updateControl("yaw", yawSlider, yawValue);
-        break;
-      case "w":
-        pitchSlider.value = Math.min(100, +pitchSlider.value + 1);
-        updateControl("pitch", pitchSlider, pitchValue);
-        break;
-      case "s":
-        pitchSlider.value = Math.max(-100, pitchSlider.value - 1);
-        updateControl("pitch", pitchSlider, pitchValue);
-        break;
-      case "d":
-        rollSlider.value = Math.min(100, +rollSlider.value + 1);
-        updateControl("roll", rollSlider, rollValue);
-        break;
-      case "a":
-        rollSlider.value = Math.max(-100, rollSlider.value - 1);
-        updateControl("roll", rollSlider, rollValue);
-        break;
-    }
-  });
-</script>
-</body>
-</html>
+    function sendControlData() {
+      const controlData = {
+        throttle: parseFloat(throttle.value),
+        roll: parseFloat(roll.value),
+        pitch: parseFloat(pitch.value),
+        yaw: parseFloat(yaw

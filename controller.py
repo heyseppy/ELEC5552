@@ -230,4 +230,4 @@ def setup_gui():
     global throttle_entry, pitch_entry, yaw_entry
 
     # Control Fields for Throttle, Pitch, Yaw
-    ttk.Label(control_frame, text="Throttle:", font=("Arial", 12)).grid(row=0, column=0, padx=5
+    ttk.Label(control_frame, text="Throttle:", font=("Arial", 12)).grid(row=0, column=0, padx=5)
