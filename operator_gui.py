@@ -4,19 +4,18 @@ import time
 import tkinter as tk
 from tkinter import scrolledtext, messagebox
 from tkinter import ttk
-from PIL import Image, ImageTk
 import cv2
+from PIL import Image, ImageTk
+import requests
 import numpy as np
 
 # ESP32 Wi-Fi AP details
 ssid = "ESP32-Test-AP"
 password = "12345678"
-esp32_ip = '192.168.4.1'  # Replace with your ESP32's IP address if different
-port = 80                 # TCP port to connect to
+esp32_ip = '172.20.10.13'  # Replace with your ESP32's IP address
+port = 12345               # TCP port for obstacle distance
 heartbeat_command = "HEARTBEAT"
-
-# Video Stream URL
-STREAM_URL = 'http://172.20.10.11:81/stream'
+stream_url = 'http://172.20.10.12:81/stream'  # ESP32-CAM stream URL
 
 # Global variables
 stop_heartbeat = False
@@ -26,28 +25,19 @@ sock_lock = threading.Lock()  # Lock for socket access
 
 # Initialize Tkinter GUI components
 root = tk.Tk()
-root.title("Team01 Design Control Interface Rev2 with Video Feed")
-root.geometry("1400x900")  # Increased size for better layout
+root.title("Team01 Design Control Interface Rev2")
+root.geometry("900x800")  # Increased size for better layout
 root.resizable(False, False)  # Fixed window size
 
 # Styling with ttk
 style = ttk.Style()
 style.theme_use('clam')  # You can choose other themes like 'default', 'alt', 'classic', etc.
 style.configure("TButton", font=("Arial", 12), padding=10)
-style.configure("Status.TLabel", font=("Arial", 10), foreground="red")
-style.configure("Red.TButton", background="red", foreground="white")
-style.configure("Yellow.TButton", background="yellow", foreground="black")
-style.configure("Green.TButton", background="green", foreground="white")
-style.configure("Blue.TButton", background="blue", foreground="white")
-style.configure("Pressed.TButton", background="lightgrey", foreground="black")
-style.configure("CustomEntry.TEntry", font=("Arial", 12), padding=5)
+style.configure("Status.TLabel", font=("Arial", 10), foreground="green")
 
 # Frames for better layout organization
 top_frame = ttk.Frame(root)
 top_frame.pack(pady=10)
-
-control_frame = ttk.Frame(root)
-control_frame.pack(pady=10)
 
 middle_frame = ttk.Frame(root)
 middle_frame.pack(pady=10)
@@ -66,16 +56,27 @@ connection_status.pack(side='left', padx=10)
 log_label = ttk.Label(bottom_frame, text="Log:")
 log_label.pack(anchor='w', padx=10)
 
-log_area = scrolledtext.ScrolledText(bottom_frame, width=150, height=15, state='disabled', wrap='word')
+log_area = scrolledtext.ScrolledText(bottom_frame, width=100, height=10, state='disabled', wrap='word')
 log_area.pack(padx=10, pady=5)
 
 # Message Display Label
 message_label = ttk.Label(top_frame, text="", font=("Arial", 14))
 message_label.pack(pady=5)
 
-# Video Frame Panel
-video_label = ttk.Label(root)
-video_label.place(x=1100, y=10, width=280, height=200)  # Positioning the video panel
+# Line Angle Display Label
+angle_label = ttk.Label(top_frame, text="Line Angle: N/A", font=("Arial", 20, "bold"), foreground="blue")
+angle_label.pack(pady=10)
+
+# Obstacle Distance Display Label
+distance_label = ttk.Label(top_frame, text="", font=("Arial", 20, "bold"), foreground="red")
+distance_label.pack(pady=10)
+
+# Video Frame to display the camera feed under buttons
+video_frame = ttk.Frame(root)
+video_frame.pack(pady=10, padx=10)
+
+camera_feed_label = tk.Label(video_frame)
+camera_feed_label.pack()
 
 # Function to update the connection status
 def update_connection_status(status):
@@ -115,34 +116,93 @@ def connect_to_server():
             update_connection_status("Disconnected")
             time.sleep(5)
 
-def send_command(command, expect_response=True):
-    """Send a command to the ESP32 over the persistent TCP connection."""
+# Function to handle receiving obstacle distance from the socket
+def receive_obstacle_distance():
+    """Continuously receive obstacle distance data from the ESP32."""
     global sock, sock_file
-    try:
-        # Ensure the connection is alive
-        if sock is None:
+    while True:
+        try:
+            # Ensure the connection is alive
+            if sock is None:
+                connect_to_server()
+            with sock_lock:
+                while True:
+                    if sock_file:
+                        obstacle_data = sock_file.readline().strip()
+                        if obstacle_data:
+                            append_log(f"Received obstacle distance: {obstacle_data}")
+                            root.after(0, lambda: distance_label.config(text=f"{obstacle_data}"))
+        except socket.error as e:
+            append_log(f"Socket error: {e}")
+            update_connection_status("Disconnected")
             connect_to_server()
-        with sock_lock:
-            sock.sendall((command + '\n').encode())
-            append_log(f"Sent command: {command}")
-            if expect_response:
-                response_line = sock_file.readline()
-                if not response_line:
-                    # Connection closed
-                    append_log("Connection closed by the server.")
-                    update_connection_status("Disconnected")
-                    sock_file.close()
-                    sock.close()
-                    sock = None
-                else:
-                    response = response_line.strip()
-                    append_log(f"Received response: {response}")
-                    # Update the GUI with the response
-                    root.after(0, lambda: display_message(response))
-    except socket.error as e:
-        append_log(f"Socket error: {e}")
-        update_connection_status("Disconnected")
-        # Handle disconnection and attempt to reconnect
+        except Exception as e:
+            append_log(f"Unexpected error: {e}")
+        time.sleep(1)
+
+# Function to detect the line angle using OpenCV
+def detect_line_angle(frame):
+    """Detect the line angle from the camera feed using OpenCV."""
+    gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+    edges = cv2.Canny(gray, 50, 150, apertureSize=3)
+    lines = cv2.HoughLines(edges, 1, np.pi / 180, 150)
+
+    if lines is not None:
+        for rho, theta in lines[0]:
+            a = np.cos(theta)
+            b = np.sin(theta)
+            x0 = a * rho
+            y0 = b * rho
+            x1 = int(x0 + 1000 * (-b))
+            y1 = int(y0 + 1000 * (a))
+            x2 = int(x0 - 1000 * (-b))
+            y2 = int(y0 - 1000 * (a))
+            angle = np.degrees(np.arctan2(y2 - y1, x2 - x1))
+            return angle
+    return None
+
+# Function to display video feed from ESP32-CAM and detect line
+def update_camera_feed():
+    cap = cv2.VideoCapture(stream_url)
+    if not cap.isOpened():
+        append_log("Unable to open the video stream.")
+        root.after(0, lambda: camera_feed_label.config(text="Unable to open video stream."))
+        return
+    append_log("Video stream started.")
+    while True:
+        ret, frame = cap.read()
+        if ret:
+            try:
+                frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+                angle = detect_line_angle(frame)
+                if angle is not None:
+                    root.after(0, lambda: angle_label.config(text=f"Line Angle: {angle:.2f}°"))
+                img = Image.fromarray(frame_rgb)
+                imgtk = ImageTk.PhotoImage(image=img)
+                camera_feed_label.imgtk = imgtk
+                camera_feed_label.config(image=imgtk)
+            except Exception as e:
+                append_log(f"Error processing video frame: {e}")
+        else:
+            append_log("Failed to read frame from video stream.")
+            root.after(0, lambda: camera_feed_label.config(text="Failed to read frame."))
+            break
+        time.sleep(0.03)  # Approximately 30 FPS
+    cap.release()
+
+# Graceful Exit Handling
+def on_closing():
+    """Handle the window closing event."""
+    global stop_heartbeat
+    if messagebox.askokcancel("Quit", "Do you want to quit the application?"):
+        append_log("Shutting down application...")
+        stop_heartbeat = True  # Stop the heartbeat thread
+        if heartbeat_thread.is_alive():
+            heartbeat_thread.join(timeout=2)  # Wait for heartbeat thread to finish
+        if angle_thread.is_alive():
+            angle_thread.join(timeout=2)  # Wait for angle thread to finish
+        if distance_thread.is_alive():
+            distance_thread.join(timeout=2)  # Wait for distance thread to finish
         with sock_lock:
             if sock_file:
                 sock_file.close()
@@ -150,84 +210,102 @@ def send_command(command, expect_response=True):
             if sock:
                 sock.close()
                 sock = None
-        connect_to_server()
-    except Exception as e:
-        append_log(f"Unexpected error: {e}")
+        root.destroy()
 
-def send_heartbeat():
-    """Continuously send heartbeat signals every second."""
-    global stop_heartbeat
-    while not stop_heartbeat:
-        try:
-            send_command(heartbeat_command, expect_response=False)  # Send the HEARTBEAT command
-            time.sleep(1)  # Send heartbeat every 1 second
-        except Exception as e:
-            append_log(f"Error in heartbeat thread: {e}")
-            break
-
-# GUI Functions
-def animate_button(button, original_color):
-    # Change button appearance to indicate it was clicked
-    button.state(['pressed'])
-    button.config(style='Pressed.TButton')
-    root.after(200, lambda: reset_button_style(button, original_color))
-
-def reset_button_style(button, color):
-    button.state(['!pressed'])
-    button.config(style=f"{color}.TButton")
-
-def display_message(message):
-    # Update the text of the message label
-    message_label.config(text=message)
-
+# Functions for each button press action
 def emergency():
     append_log("Emergency Stop triggered.")
-    display_message("Emergency Stop")
-    animate_button(emergency_button, "Red")
-    send_command("STOP")  # Assuming "STOP" corresponds to Emergency Stop
+    send_command("STOP")
+    message_label.config(text="Emergency Stop")
 
 def hover():
     append_log("Hover Mode activated.")
-    display_message("Hover Mode")
-    animate_button(hover_button, "Yellow")
     send_command("HOVER")
+    message_label.config(text="Hover Mode")
 
 def manual():
     append_log("Manual Mode activated.")
-    display_message("Manual Mode")
-    animate_button(manual_button, "Green")
     send_command("MANUAL")
+    message_label.config(text="Manual Mode")
 
 def autonomous():
-    append_log("Autonomous Control activated.")
-    display_message("Autonomous Control")
-    animate_button(autonomous_button, "Blue")
+    append_log("Autonomous Mode activated.")
     send_command("AUTO")
+    message_label.config(text="Autonomous Mode")
 
-def submit_control_values():
-    """Submit throttle, pitch, and yaw values."""
-    throttle = throttle_entry.get().strip()
-    pitch = pitch_entry.get().strip()
-    yaw = yaw_entry.get().strip()
+def send_command(command):
+    """Send a command to the ESP32."""
+    append_log(f"Sending command: {command}")
+    # Handle sending command via socket (or other communication method)
 
-    append_log(f"Submitting Control Values - Throttle: {throttle}, Pitch: {pitch}, Yaw: {yaw}")
-    display_message(f"Throttle: {throttle}, Pitch: {pitch}, Yaw: {yaw}")
-    # Send these values to the ESP32 (assuming they are formatted for your system)
-    send_command(f"CONTROL THROTTLE={throttle} PITCH={pitch} YAW={yaw}")
+def setup_gui():
+    global emergency_button, hover_button, manual_button, autonomous_button, custom_command_entry
+
+    # Define custom styles for buttons
+    style.configure("Red.TButton", background="red", foreground="white")
+    style.configure("Yellow.TButton", background="yellow", foreground="black")
+    style.configure("Green.TButton", background="green", foreground="white")
+    style.configure("Blue.TButton", background="blue", foreground="white")
+    style.configure("Pressed.TButton", background="lightgrey", foreground="black")
+
+    # Create Buttons
+    emergency_button = ttk.Button(middle_frame, text="Emergency Stop", command=emergency, style="Red.TButton")
+    emergency_button.grid(row=0, column=0, padx=20, pady=10, ipadx=10, ipady=10)
+
+    hover_button = ttk.Button(middle_frame, text="Hover Mode", command=hover, style="Yellow.TButton")
+    hover_button.grid(row=0, column=1, padx=20, pady=10, ipadx=10, ipady=10)
+
+    manual_button = ttk.Button(middle_frame, text="Manual Mode", command=manual, style="Green.TButton")
+    manual_button.grid(row=0, column=2, padx=20, pady=10, ipadx=10, ipady=10)
+
+    autonomous_button = ttk.Button(middle_frame, text="Autonomous Control", command=autonomous, style="Blue.TButton")
+    autonomous_button.grid(row=0, column=3, padx=20, pady=10, ipadx=10, ipady=10)
+
+    # Custom Command Section
+    custom_command_label = ttk.Label(top_frame, text="Send Custom Command:", font=("Arial", 12))
+    custom_command_label.pack(pady=5)
+
+    custom_command_frame = ttk.Frame(top_frame)
+    custom_command_frame.pack(pady=5)
+
+    custom_command_entry = ttk.Entry(custom_command_frame, width=50, font=("Arial", 12))
+    custom_command_entry.pack(side='left', padx=5)
+
+    send_custom_button = ttk.Button(custom_command_frame, text="Send", command=send_custom_command)
+    send_custom_button.pack(side='left', padx=5)
 
 def send_custom_command():
     command = custom_command_entry.get().strip()
     if command:
         append_log(f"Custom command sent: {command}")
-        display_message(f"Custom Command: {command}")
         send_command(command)
         custom_command_entry.delete(0, tk.END)
     else:
         messagebox.showwarning("Input Error", "Please enter a command to send.")
 
-def setup_gui():
-    global emergency_button, hover_button, manual_button, autonomous_button, custom_command_entry
-    global throttle_entry, pitch_entry, yaw_entry
+# Main Function
+def main():
+    global heartbeat_thread, angle_thread, distance_thread
+    # Establish initial connection to the server
+    connection_thread = threading.Thread(target=connect_to_server, daemon=True)
+    connection_thread.start()
 
-    # Control Fields for Throttle, Pitch, Yaw
-    ttk.Label(control_frame, text="Throttle:", font=("Arial", 12)).grid(row=0, column=0, padx=5
+    # Start receiving obstacle distance in a separate thread
+    distance_thread = threading.Thread(target=receive_obstacle_distance, daemon=True)
+    distance_thread.start()
+
+    # Start the camera feed thread with line detection
+    camera_thread = threading.Thread(target=update_camera_feed, daemon=True)
+    camera_thread.start()
+
+    # Setup the GUI
+    setup_gui()
+
+    # Handle window close event
+    root.protocol("WM_DELETE_WINDOW", on_closing)
+
+    # Start the Tkinter event loop
+    root.mainloop()
+
+if __name__ == "__main__":
+    main()
