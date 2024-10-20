@@ -7,7 +7,7 @@
 
 ## Overview
 
-Welcome to the repository for the **ELEC5552 Electrical Design Project** at the University of Western Australia. This project encompasses hardware designs, build guides, and software implementations for developing a fully autonomous drone. The goal is to design and build a robust drone capable of autonomous line following, obstacle detection, and smooth transitions between manual and autonomous control modes.
+This project encompasses hardware designs, build guides, and software implementations for developing a fully autonomous drone. The goal is to design and build a robust drone capable of autonomous line following, obstacle detection, and smooth transitions between manual and autonomous control modes.
 
 ### Key Features
 
