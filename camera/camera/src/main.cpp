@@ -1,65 +1,31 @@
 #include "esp_camera.h"
 #include <WiFi.h>
+#include <AsyncTCP.h>
+#include <ESPAsyncWebServer.h>
 
-//
-// WARNING!!! Make sure that you have either selected ESP32 Wrover Module,
-//            or another board which has PSRAM enabled
-//
-
-// Select camera model
-//#define CAMERA_MODEL_WROVER_KIT
-//#define CAMERA_MODEL_M5STACK_PSRAM
+// Camera model selection
 #define CAMERA_MODEL_AI_THINKER
 
+// WiFi credentials
 const char* ssid = "iPhone";
 const char* password = "12345678";
 
+// Socket server details (IP and port of the transmitter)
+const char* socket_host = "172.20.10.13";  // Replace with the IP of the transmitter ESP32
+const int socket_port = 12345;              // Port number for TCP socket communication
 
-#if defined(CAMERA_MODEL_WROVER_KIT)
-#define PWDN_GPIO_NUM    -1
-#define RESET_GPIO_NUM   -1
-#define XCLK_GPIO_NUM    21
-#define SIOD_GPIO_NUM    26
-#define SIOC_GPIO_NUM    27
+// Create AsyncWebServer object on port 80
+AsyncWebServer server(80);
 
-#define Y9_GPIO_NUM      35
-#define Y8_GPIO_NUM      34
-#define Y7_GPIO_NUM      39
-#define Y6_GPIO_NUM      36
-#define Y5_GPIO_NUM      19
-#define Y4_GPIO_NUM      18
-#define Y3_GPIO_NUM       5
-#define Y2_GPIO_NUM       4
-#define VSYNC_GPIO_NUM   25
-#define HREF_GPIO_NUM    23
-#define PCLK_GPIO_NUM    22
+WiFiClient socketClient;
 
-#elif defined(CAMERA_MODEL_M5STACK_PSRAM)
-#define PWDN_GPIO_NUM     -1
-#define RESET_GPIO_NUM    15
-#define XCLK_GPIO_NUM     27
-#define SIOD_GPIO_NUM     25
-#define SIOC_GPIO_NUM     23
-
-#define Y9_GPIO_NUM       19
-#define Y8_GPIO_NUM       36
-#define Y7_GPIO_NUM       18
-#define Y6_GPIO_NUM       39
-#define Y5_GPIO_NUM        5
-#define Y4_GPIO_NUM       34
-#define Y3_GPIO_NUM       35
-#define Y2_GPIO_NUM       32
-#define VSYNC_GPIO_NUM    22
-#define HREF_GPIO_NUM     26
-#define PCLK_GPIO_NUM     21
-
-#elif defined(CAMERA_MODEL_AI_THINKER)
+// Camera configuration for AI-Thinker
+#if defined(CAMERA_MODEL_AI_THINKER)
 #define PWDN_GPIO_NUM     32
 #define RESET_GPIO_NUM    -1
 #define XCLK_GPIO_NUM      0
 #define SIOD_GPIO_NUM     26
 #define SIOC_GPIO_NUM     27
-
 #define Y9_GPIO_NUM       35
 #define Y8_GPIO_NUM       34
 #define Y7_GPIO_NUM       39
@@ -71,18 +37,21 @@ const char* password = "12345678";
 #define VSYNC_GPIO_NUM    25
 #define HREF_GPIO_NUM     23
 #define PCLK_GPIO_NUM     22
-
-#else
-#error "Camera model not selected"
 #endif
 
+// Function to start the camera server
 void startCameraServer();
 
+// Function to handle socket communication
+void handleSocketConnection(void* parameter);
+
 void setup() {
+  // Initialize serial communication for USB debugging
   Serial.begin(115200);
   Serial.setDebugOutput(true);
   Serial.println();
 
+  // Camera configuration
   camera_config_t config;
   config.ledc_channel = LEDC_CHANNEL_0;
   config.ledc_timer = LEDC_TIMER_0;
@@ -104,8 +73,9 @@ void setup() {
   config.pin_reset = RESET_GPIO_NUM;
   config.xclk_freq_hz = 20000000;
   config.pixel_format = PIXFORMAT_JPEG;
-  //init with high specs to pre-allocate larger buffers
-  if(psramFound()){
+
+  // Set camera settings based on PSRAM availability
+  if (psramFound()) {
     config.frame_size = FRAMESIZE_UXGA;
     config.jpeg_quality = 10;
     config.fb_count = 2;
@@ -115,36 +85,71 @@ void setup() {
     config.fb_count = 1;
   }
 
-  // camera init
+  // Initialize the camera
   esp_err_t err = esp_camera_init(&config);
   if (err != ESP_OK) {
     Serial.printf("Camera init failed with error 0x%x", err);
     return;
   }
 
-  //drop down frame size for higher initial frame rate
-  sensor_t * s = esp_camera_sensor_get();
-  s->set_framesize(s, FRAMESIZE_QVGA);
+  // Set a lower frame size for faster streaming
+  sensor_t* s = esp_camera_sensor_get();
+  s->set_framesize(s, FRAMESIZE_QVGA);  // Lower resolution for faster streaming
 
+  // Initialize WiFi
   WiFi.begin(ssid, password);
-
   while (WiFi.status() != WL_CONNECTED) {
     delay(500);
     Serial.print(".");
   }
   Serial.println("");
   Serial.println("WiFi connected");
-  
+
+  // Start the camera server
   startCameraServer();
-  
-  Serial.print("Camera Ready! Use 'http://");
+
+  // Start the socket client in a separate task to handle TCP connection and data
+  xTaskCreate(handleSocketConnection, "Socket Task", 4096, NULL, 1, NULL);
+
+  Serial.print("Camera and Socket Client ready! Use 'http://");
   Serial.print(WiFi.localIP());
   Serial.println("' to connect");
 }
 
 void loop() {
-  // put your main code here, to run repeatedly:
-  delay(10000);
+  // Main loop remains empty, as socket handling runs in a separate task
+  delay(10000);  // Delay to keep loop idle
 }
 
 
+// Function to handle the socket connection and receive ultrasonic data
+void handleSocketConnection(void* parameter) {
+  while (true) {
+    // Attempt to connect to the transmitter (TCP server)
+    if (!socketClient.connected()) {
+      Serial.println("Connecting to the socket server...");
+      if (socketClient.connect(socket_host, socket_port)) {
+        Serial.println("Connected to the socket server.");
+      } else {
+        Serial.println("Failed to connect to the socket server.");
+        delay(5000);  // Wait before retrying
+        continue;
+      }
+    }
+
+    // Read data from the socket when connected
+    while (socketClient.connected()) {
+      if (socketClient.available()) {
+        String data = socketClient.readStringUntil('\n');  // Read the data sent by the transmitter
+        Serial.println("Received ultrasonic distance: " + data);  // Print received data to serial
+      }
+      delay(100);  // Add some delay to avoid overwhelming the loop
+    }
+
+    // If disconnected, attempt to reconnect
+    if (!socketClient.connected()) {
+      Serial.println("Socket disconnected. Reconnecting...");
+    }
+    delay(1000);  // Wait before attempting to reconnect
+  }
+}
