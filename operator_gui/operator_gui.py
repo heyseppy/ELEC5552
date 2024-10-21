@@ -84,6 +84,8 @@ class NetworkClient:
                 try:
                     self.sock.sendall((command + "\n").encode())
                     self.logger.info(f"Sent command: {command}")
+                    self.network_client.send_command(command)
+                    self.message_label.config(text=f"Command Sent: {command}")
                 except socket.error as e:
                     self.logger.error(f"Failed to send command '{command}': {e}")
                     self.update_status_callback("Disconnected")
@@ -421,6 +423,9 @@ class DroneControlApp:
     def send_command(self, command):
         """Send a command to the ESP32."""
         self.network_client.send_command(command)
+        if command == "hover":
+            self.network_client.send_command(command)
+            self.message_label.config(text=f"Command Sent: {command}")
         self.message_label.config(text=f"Command Sent: {command}")
 
     def emergency_stop(self):
